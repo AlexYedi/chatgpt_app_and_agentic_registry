@@ -1,28 +1,24 @@
-# Agentic Policy Registry
+# chatgpt_app_and_agentic_registry
 
-This repo is a structured catalog of models/tools/agents with routing heuristics, constraints,
-interfaces, and safety guardrails.
+A structured, versioned registry that defines my tech stack for ChatGPT-assisted and agentic workflows.
 
-## Canonical file
-- `registry/master.yaml` (source of truth)
+This repo is the **source of truth** for:
+- Tool catalog (apps, models, agents)
+- Routing heuristics (when to use what)
+- Safety / escalation policies (what requires confirmation)
+- IO contracts (how tools should be invoked and what they should return)
+- Workflow blueprints (repeatable orchestrations)
 
-## How to use with ChatGPT (this chat)
-1. Upload `registry/master.yaml` directly into the chat when you want it applied.
-2. Ask: “Use the policy registry to route this task. Output:
-   - selected tool_id
-   - decision rationale (bullets)
-   - the handoff artifact as JSON.”
+---
 
-### Recommended prompt pattern
-Paste this above a task:
+## Repo structure
 
-**Policy Context:** (attached: `registry/master.yaml`)
-**Task:** <what you want>
-**Output Contract:** JSON with:
-- `selected_tool_id`
-- `decision_trace` (bullets)
-- `handoff_artifact` (object)
+```text
+registry/
+  master.yaml                         # Canonical registry (source of truth)
 
-## How to use with orchestrators
-- Parse `registry/master.yaml` into your router (n8n, a custom service, etc.)
-- Enforce schema validation in CI using the included workflow.
+schemas/
+  agentic-policy-registry.schema.json # JSON Schema used to validate master.yaml
+
+.github/workflows/
+  validate.yaml                        # CI: yamllint + schema validation
