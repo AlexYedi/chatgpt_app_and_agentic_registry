@@ -1,0 +1,341 @@
+# Agentic Policy Registry — Canonical Master
+# Owner: Alexander Yedibalian
+# Schema: schemas/agentic-policy-registry.schema.json
+
+schema_version: "2.1"
+registry:
+  id: "agentic-policy-registry"
+  owner: "Alexander Yedibalian"
+  created_at: "2026-02-19"
+  updated_at: "2026-02-19"
+  intent: >
+    A normalized catalog of tools/agents/models with decision heuristics, constraints,
+    interfaces, and safety guardrails—designed to power reliable agentic execution.
+
+governance:
+  defaults:
+    require_explicit_confirmation_for:
+      - destructive_actions
+      - external_writes_high_impact
+      - irreversible_security_changes
+    logging:
+      enabled: true
+      fields:
+        - timestamp
+        - tool_id
+        - action
+        - input_hash
+        - output_hash
+        - status
+        - error
+  safety:
+    never_do:
+      - "Run DELETE/DROP in databases without explicit human confirmation."
+      - "Assume permissions; always verify auth scopes when tools error."
+    data_handling:
+      pii:
+        store: "minimize"
+        redact_in_logs: true
+
+routing:
+  # Global router guidance (tool selection heuristics)
+  principles:
+    - "Prefer deterministic systems for side effects; prefer LLMs for synthesis."
+    - "Separate retrieval from reasoning (RAG pattern)."
+    - "Always return machine-parseable artifacts for automation handoff."
+  fallback_order:
+    # If primary fails or is rate-limited, try in this order by capability match
+    - "model.gemini_3_0_pro"
+    - "model.chatgpt_pro"
+    - "research.perplexity_pro"
+
+tools:
+  # ---------------------------------------------------------------------------
+  # SECTION 1: CORE INTELLIGENCE (The "Brains")
+  # ---------------------------------------------------------------------------
+  - id: "model.gemini_3_0_pro"
+    kind: "model_inference"
+    name: "Gemini 3.0 Pro"
+    status: "primary"
+    when_to_use:
+      - "Complex reasoning / long-context synthesis"
+      - "Multimodal analysis (video/image/code)"
+      - "Work requiring Google Workspace native integration"
+    decision_logic:
+      rules:
+        - if: "requires_context_tokens >= 128000"
+          then: "use"
+          because: "Long-context advantage"
+        - if: "requires_google_workspace_integration == true"
+          then: "use"
+          because: "Native G-Suite integration"
+        - if: "task_type in ['quick_logic_check','short_creative'] and requires_private_files == false"
+          then: "consider_alternative"
+          alternative: "model.chatgpt_pro"
+    constraints:
+      rate_limits:
+        notes: "Tier 1 (Paid). Monitor TPM."
+      privacy:
+        notes: "Assumes paid/enterprise mode where data is not used for training."
+      state:
+        default: "stateless"
+        persistence_strategy:
+          - "Pass conversation_id and/or user_summary_context explicitly."
+    interfaces:
+      inputs: ["text", "image", "video", "code", "json"]
+      outputs:
+        preferred: ["json", "markdown"]
+        allowed: ["text"]
+      output_contract:
+        machine_readable_required_for_handoff: true
+        recommended_envelope:
+          type: "object"
+          required_fields: ["summary", "decision", "artifact"]
+    composition:
+      typical_position: "workflow_start"
+      common_handoffs:
+        - to: "workflow.n8n"
+          artifact: "json"
+        - to: "dev.cursor"
+          artifact: "code_blocks_or_diff"
+
+  - id: "research.perplexity_pro"
+    kind: "research_engine"
+    name: "Perplexity Pro"
+    status: "specialist"
+    when_to_use:
+      - "Real-time web facts where citations are non-negotiable"
+      - "Latest news / current status checks"
+    decision_logic:
+      rules:
+        - if: "query_has_recency_requirement == true"
+          then: "use"
+          because: "Web retrieval + citations"
+        - if: "task_type in ['explain_concept','design_system','write_spec']"
+          then: "do_not_use"
+          because: "Not a reasoning engine"
+    constraints:
+      output:
+        format: "text_with_citation_indices"
+      access:
+        private_files: false
+        code_execution: false
+    interfaces:
+      inputs: ["text"]
+      outputs:
+        preferred: ["text"]
+      output_contract:
+        must_include_citations: true
+        recommended_envelope:
+          type: "object"
+          required_fields: ["summary", "sources"]
+    composition:
+      typical_position: "pre_reasoning"
+      common_handoffs:
+        - to: "model.gemini_3_0_pro"
+          artifact: "cited_summary"
+
+  - id: "model.chatgpt_pro"
+    kind: "model_inference"
+    name: "ChatGPT (Pro tier / strongest available here)"
+    status: "fallback"
+    when_to_use:
+      - "Synthesis, planning, editorial refinement, structured drafting"
+      - "Tooling guidance and system design iteration"
+    decision_logic:
+      rules:
+        - if: "need_fast_iteration == true and context_size_is_medium == true"
+          then: "use"
+    constraints:
+      state:
+        default: "stateless"
+        persistence_strategy:
+          - "Attach master.yaml in the chat when you want it applied."
+    interfaces:
+      inputs: ["text", "files", "json"]
+      outputs:
+        preferred: ["markdown", "json"]
+        allowed: ["text"]
+
+  # ---------------------------------------------------------------------------
+  # SECTION 2: WORKFLOW & ORCHESTRATION (The "Nervous System")
+  # ---------------------------------------------------------------------------
+  - id: "workflow.n8n"
+    kind: "workflow_automation"
+    name: "n8n"
+    status: "primary"
+    when_to_use:
+      - "Executing side effects across multiple apps"
+      - "Deterministic IF/THEN automations"
+    decision_logic:
+      rules:
+        - if: "apps_involved_count >= 3"
+          then: "use"
+          because: "Multi-app orchestration"
+        - if: "single_api_call == true"
+          then: "consider_direct_api"
+    constraints:
+      requirements:
+        - "Workflow must exist and have a workflow_id"
+      auth:
+        strategy: "n8n_managed_credentials"
+      safety:
+        confirmation_required_for:
+          - "destructive_actions"
+          - "bulk_writes"
+    interfaces:
+      inputs: ["json"]
+      outputs:
+        preferred: ["json"]
+      output_contract:
+        required_fields: ["execution_id", "status"]
+    composition:
+      typical_position: "terminal_action"
+      observability:
+        logs: "n8n_dashboard"
+        correlation_id_field: "execution_id"
+
+  # ---------------------------------------------------------------------------
+  # SECTION 3: DEVELOPMENT & STATE (The "Hands" & "Memory")
+  # ---------------------------------------------------------------------------
+  - id: "pm.linear"
+    kind: "project_management"
+    name: "Linear"
+    status: "primary"
+    when_to_use:
+      - "Source of truth for product/engineering work"
+      - "Create/triage issues, manage cycles, update priorities"
+    decision_logic:
+      rules:
+        - if: "input_type in ['bug_report','feature_request']"
+          then: "create_issue"
+        - if: "question_type == 'status_query'"
+          then: "query_cycles_roadmaps"
+    constraints:
+      auth:
+        required: true
+        method: "personal_api_key"
+        scopes: ["read", "write"]
+      validation:
+        required_fields: ["team_id", "priority"]
+    interfaces:
+      inputs: ["json"]
+      outputs:
+        preferred: ["json"]
+      output_contract:
+        required_fields: ["issue_id", "issue_number", "url"]
+    composition:
+      typical_position: "after_spec"
+      common_handoffs:
+        - to: "agent.chatprd"
+          artifact: "spec_markdown"
+
+  - id: "db.supabase"
+    kind: "database_backend"
+    name: "Supabase"
+    status: "primary"
+    when_to_use:
+      - "Data persistence, auth checks, RAG/vector search, logging"
+    decision_logic:
+      rules:
+        - if: "data_type == 'unstructured_documents'"
+          then: "use_storage_buckets"
+        - if: "need_user_profile == true"
+          then: "use_auth_or_users_table"
+        - if: "need_memory_retrieval == true"
+          then: "use_vector_search"
+    constraints:
+      security:
+        - "RLS applies to all queries"
+      safety:
+        confirmation_required_for:
+          - "delete"
+          - "drop"
+    interfaces:
+      inputs: ["sql", "json"]
+      outputs:
+        preferred: ["json"]
+    composition:
+      typical_position: "anywhere"
+      observability:
+        logs: "db_audit + app_logs"
+
+  # ---------------------------------------------------------------------------
+  # SECTION 4: G-SUITE (The "Office OS")
+  # ---------------------------------------------------------------------------
+  - id: "gsuite.google_sheets"
+    kind: "structured_data"
+    name: "Google Sheets"
+    status: "primary"
+    when_to_use:
+      - "Lightweight collaborative DB for non-technical stakeholders"
+    decision_logic:
+      rules:
+        - if: "needs_human_editable == true"
+          then: "use"
+        - if: "row_count_estimate >= 100000 or needs_strict_app_db == true"
+          then: "use_alternative"
+          alternative: "db.supabase"
+    constraints:
+      rate_limits:
+        notes: "Approx 60 requests/min per user (verify for your account limits)."
+      safety:
+        avoid:
+          - "Breaking formulas"
+          - "Overwriting protected ranges"
+    composition:
+      typical_position: "destination"
+
+  # ---------------------------------------------------------------------------
+  # SECTION 5: SPECIALIZED AGENTS (The "Experts")
+  # ---------------------------------------------------------------------------
+  - id: "agent.chatprd"
+    kind: "product_agent"
+    name: "ChatPRD"
+    status: "specialist"
+    when_to_use:
+      - "Drafting PRDs and feature specs"
+    decision_logic:
+      rules:
+        - if: "task_type in ['prd','feature_spec']"
+          then: "use"
+        - if: "task_type == 'marketing_content'"
+          then: "do_not_use"
+    interfaces:
+      inputs: ["text", "notes", "json"]
+      outputs:
+        preferred: ["markdown"]
+      output_contract:
+        required_sections:
+          - "Problem"
+          - "Goals/Non-Goals"
+          - "User Stories"
+          - "Acceptance Criteria"
+    composition:
+      common_handoffs:
+        - to: "pm.linear"
+          artifact: "issue_description_markdown"
+        - to: "gsuite.google_docs"
+          artifact: "doc_markdown"
+
+  - id: "dev.cursor"
+    kind: "coding_agent"
+    name: "Cursor"
+    status: "specialist"
+    when_to_use:
+      - "Repo-aware coding, refactors, diff generation"
+    decision_logic:
+      rules:
+        - if: "requires_full_repo_context == true"
+          then: "use"
+        - if: "standalone_script == true"
+          then: "consider_alternative"
+          alternative: "dev.replit_or_claude_code"
+    constraints:
+      access:
+        requires: ["local_env_or_ssh"]
+    composition:
+      typical_position: "implementation"
+      common_handoffs:
+        - to: "pm.linear"
+          artifact: "progress_updates"
